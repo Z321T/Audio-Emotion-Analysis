@@ -1,15 +1,21 @@
-from audio_emotion import analyze_audio_file
+import sys
+
+from audio_emotion import analyze_audio_file, interactive_microphone_dialog
 
 
 def main() -> None:
+    if len(sys.argv) < 2:
+        print("用法:")
+        print("  python main.py <本地音频路径>")
+        print("  python main.py mic")
+        return
 
-    audio_path = "test_audio/测试音频001.mp3"
-    response = analyze_audio_file(audio_path)
+    arg = sys.argv[1].strip().lower()
+    if arg == "mic":
+        interactive_microphone_dialog(max_seconds_per_turn=30)
+        return
 
-    print(response)
-
-    audio_path = "test_audio/测试音频002.mp3"
-    response = analyze_audio_file(audio_path)
+    response = analyze_audio_file(sys.argv[1])
     print(response)
 
 

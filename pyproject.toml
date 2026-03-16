@@ -9,6 +9,7 @@ dependencies = [
     "librosa>=0.11.0",
     "modelscope>=1.35.0",
     "python-dotenv>=1.2.2",
+    "sounddevice>=0.5.2",
     "torch==2.8.0",
     "torchaudio==2.8.0",
     "transformers>=5.3.0",
@@ -43,3 +44,7 @@ explicit = true
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["audio_emotion*"]
+exclude = ["test_audio*"]
