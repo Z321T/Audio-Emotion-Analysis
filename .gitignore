@@ -183,3 +183,4 @@ cython_debug/
 .idea
 
 audio_emotion/pretrained_models
+.copilot/

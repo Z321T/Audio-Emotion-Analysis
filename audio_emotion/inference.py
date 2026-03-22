@@ -1,134 +1,134 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+import asyncio
 import time
+from pathlib import Path
 
-import librosa
 import numpy as np
-import torch
-from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 
-from audio_emotion.load import get_model_and_processor
-
-
-DEFAULT_ANALYSIS_PROMPT = (
-    "请先给出音频中的完整中文转写，再判断整体情绪。"
-    "仅输出 JSON，格式必须为: "
-    '{"transcription":"...","emotion":"...","reason":"..."}'
-)
+from .api_voice_companion import voice_companion_pipeline_from_waveform
+from .qwen_audio_service import analyze_audio_file, analyze_audio_file_async
 
 
-def _analyze_audio_waveform(
-    audio_waveform: np.ndarray,
-    source_tag: str,
-    max_new_tokens: int = 256,
-    prompt: str = DEFAULT_ANALYSIS_PROMPT,
-) -> str:
-    model, processor, input_device = get_model_and_processor()
-
-    conversation: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": "你是一名专业的音频内容与情绪分析助手。请始终使用中文回答。",
-        },
-        {
-            "role": "user",
-            "content": [
-                {"type": "audio", "audio_url": source_tag},
-                {"type": "text", "text": prompt},
-            ],
-        },
-    ]
-
-    text = processor.apply_chat_template(
-        conversation,
-        add_generation_prompt=True,
-        tokenize=False,
-    )
-    inputs = processor(text=text, audio=audio_waveform, return_tensors="pt", padding=True)
-
-    model_inputs = {
-        key: value.to(input_device) if hasattr(value, "to") else value
-        for key, value in inputs.items()
-    }
-
-    with torch.inference_mode():
-        generated = model.generate(**model_inputs, max_new_tokens=max_new_tokens)
-
-    prompt_len = model_inputs["input_ids"].shape[1]
-    generated = generated[:, prompt_len:]
-
-    return processor.batch_decode(
-        generated,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )[0].strip()
-
-
-def analyze_audio_file(audio_path: str | Path, max_new_tokens: int = 256) -> str:
-    """
-    输入本地音频文件路径，返回中文分析结果（转写 + 情绪）。
-    """
-    path = Path(audio_path).expanduser().resolve()
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"未找到音频文件: {path}")
-
-    _, processor, _ = get_model_and_processor()
-    sampling_rate = processor.feature_extractor.sampling_rate
-    audio_waveform, _ = librosa.load(path, sr=sampling_rate, mono=True)
-
-    return _analyze_audio_waveform(
-        audio_waveform=audio_waveform,
-        source_tag=str(path),
-        max_new_tokens=max_new_tokens,
-    )
+DEFAULT_MIC_SAMPLE_RATE = 16000
 
 
 def _record_microphone_audio(
     sample_rate: int,
     max_seconds: int = 30,
+    min_seconds: float = 1.2,
+    silence_threshold: float = 0.008,
+    silence_duration: float = 1.0,
 ) -> np.ndarray:
-    if max_seconds > 30:
-        max_seconds = 30
+    """
+    从麦克风录制一轮用户语音，检测静音后自动结束。
+
+    参数：
+        sample_rate: 录音采样率。
+        max_seconds: 单轮最大录音时长，超过后会自动停止。
+        min_seconds: 单轮最短录音时长，避免过早截断。
+        silence_threshold: 静音判定阈值（基于 RMS）。
+        silence_duration: 连续静音达到该时长后结束录音。
+
+    返回：
+        返回一维 `np.ndarray` 音频波形。
+        若未录到有效语音或麦克风不可用，会直接抛出异常。
+    """
+    max_seconds = min(max_seconds, 30)
 
     try:
-        import msvcrt
         import sounddevice as sd  # type: ignore[import-not-found]
     except ImportError as exc:
         raise ImportError(
             "麦克风对话需要安装 sounddevice，先执行: pip install sounddevice"
         ) from exc
 
-    print("请按回车开始本轮录音，录音中再次按回车可提前结束。")
-    input()
-
     frames: list[np.ndarray] = []
+    block_size = max(1, int(sample_rate * 0.2))
+    started = False
+    last_voice_time = time.time()
+    start_time = time.time()
 
-    def _callback(indata: np.ndarray, frames_count: int, time_info: Any, status: Any) -> None:
-        if status:
-            print(f"录音状态: {status}")
-        frames.append(indata.copy())
-
-    start = time.time()
-    print(f"开始录音，最长 {max_seconds} 秒。")
-    with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32", callback=_callback):
+    print(f"开始录音，最长 {max_seconds} 秒。请直接说话。")
+    with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32", blocksize=block_size) as stream:
         while True:
-            elapsed = time.time() - start
+            block, _ = stream.read(block_size)
+            frames.append(block.copy())
+
+            rms = float(np.sqrt(np.mean(np.square(block), dtype=np.float64)))
+            now = time.time()
+            elapsed = now - start_time
+
+            if rms >= silence_threshold:
+                started = True
+                last_voice_time = now
+
             if elapsed >= max_seconds:
-                print("已达到 30 秒上限，停止录音并开始模型处理。")
+                print("达到本轮录音上限，停止录音。")
                 break
-            if msvcrt.kbhit():
-                char = msvcrt.getwch()
-                if char in {"\r", "\n"}:
-                    break
-            time.sleep(0.05)
+
+            if started and elapsed >= min_seconds and (now - last_voice_time) >= silence_duration:
+                print("检测到静音，停止录音。")
+                break
 
     if not frames:
         raise RuntimeError("未采集到音频，请检查麦克风设备。")
 
     audio_waveform = np.concatenate(frames, axis=0).squeeze(axis=-1)
+    if np.max(np.abs(audio_waveform)) < 1e-4:
+        raise RuntimeError("未检测到有效语音，请检查麦克风输入音量。")
     return audio_waveform
+
+
+async def run_voice_companion_dialog(
+    max_seconds_per_turn: int = 30,
+    max_audio_tokens: int = 256,
+    max_reply_tokens: int = 256,
+    max_turns: int | None = None,
+) -> None:
+    """
+    运行完整语音陪护流程：麦克风输入 -> 音频分析 -> EmoLLM回复 -> TTS合成并播放。
+
+    参数：
+        max_seconds_per_turn: 单轮录音最大时长（秒），最大不超过 30 秒。
+        max_audio_tokens: 音频分析阶段最大生成 token 数。
+        max_reply_tokens: 陪护回复阶段最大生成 token 数。
+        max_turns: 最大轮数，`None` 表示无限轮，需通过 `Ctrl+C` 主动结束。
+
+    返回：
+        无。该函数会持续执行对话循环直到达到轮次上限或被用户中断。
+    """
+    sampling_rate = DEFAULT_MIC_SAMPLE_RATE
+
+    print("已进入语音陪护模式。")
+    print("流程：自动录音 -> 情绪分析 -> 文本回复 -> 语音播报。按 Ctrl+C 结束。")
+
+    turn = 1
+    while True:
+        if max_turns is not None and turn > max_turns:
+            print("达到设定轮数，已结束语音陪护。")
+            break
+
+        try:
+            print(f"\n--- 第 {turn} 轮 ---")
+            audio_waveform = await asyncio.to_thread(
+                _record_microphone_audio,
+                sample_rate=sampling_rate,
+                max_seconds=max_seconds_per_turn,
+            )
+
+            _ = await voice_companion_pipeline_from_waveform(
+                audio_waveform=audio_waveform,
+                sample_rate=sampling_rate,
+                source_tag=f"microphone_turn_{turn}.wav",
+                play_audio=True,
+                max_audio_tokens=max_audio_tokens,
+                max_reply_tokens=max_reply_tokens,
+            )
+        except Exception as exc:
+            print(f"第 {turn} 轮处理失败: {exc}")
+            continue
+        turn += 1
 
 
 def interactive_microphone_dialog(
@@ -136,40 +136,32 @@ def interactive_microphone_dialog(
     max_new_tokens: int = 256,
 ) -> None:
     """
-    伪流式麦克风对话：每轮录音（<=30秒）-> 推理 -> 输出 -> 等待下一轮。
-    手动输入 q 可结束程序。
+    兼容旧接口并启动自动语音陪护循环。
+
+    参数：
+        max_seconds_per_turn: 单轮录音最大时长（秒）。
+        max_new_tokens: 兼容参数，映射到音频分析与文本回复的生成长度。
+
+    返回：
+        无。内部通过 `asyncio.run` 执行异步陪护循环。
     """
-    _, processor, _ = get_model_and_processor()
-    sampling_rate = processor.feature_extractor.sampling_rate
+    asyncio.run(
+        run_voice_companion_dialog(
+            max_seconds_per_turn=max_seconds_per_turn,
+            max_audio_tokens=max_new_tokens,
+            max_reply_tokens=max_new_tokens,
+            max_turns=None,
+        )
+    )
 
-    print("已进入麦克风对话模式。")
-    print("说明: 单轮音频建议 30 秒以内；超时会自动截断并立即处理。")
 
-    turn = 1
-    while True:
-        command = input("输入 q 退出，直接回车将准备开始第 %d 轮录音: " % turn).strip().lower()
-        if command == "q":
-            print("已退出麦克风对话模式。")
-            break
-
-        try:
-            audio_waveform = _record_microphone_audio(
-                sample_rate=sampling_rate,
-                max_seconds=max_seconds_per_turn,
-            )
-            response = _analyze_audio_waveform(
-                audio_waveform=audio_waveform,
-                source_tag=f"microphone_turn_{turn}.wav",
-                max_new_tokens=max_new_tokens,
-            )
-        except Exception as exc:
-            print(f"第 {turn} 轮处理失败: {exc}")
-            continue
-
-        print(f"第 {turn} 轮模型回答:\n{response}\n")
-        turn += 1
+__all__ = [
+    "analyze_audio_file",
+    "analyze_audio_file_async",
+    "interactive_microphone_dialog",
+    "run_voice_companion_dialog",
+]
 
 
 if __name__ == "__main__":
-    # 示例：直接运行 inference.py 后进入麦克风轮次对话
     interactive_microphone_dialog()
