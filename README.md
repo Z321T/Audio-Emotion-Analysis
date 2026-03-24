@@ -35,7 +35,7 @@
   * `audio_asr_analysis.py`：驱动 Qwen2-Audio 处理音频并输出结果。
   * `emotion_llm_reply.py`：驱动 EmoLLM 生成文本回复。
   * `audio_tts.py`：调用 Qwen3-TTS 生成并保存语音文件。
-* **`demo_*.py`**：各个独立业务模块及全链路流的测试入口。`demo_asr_llm_tts.py` 为贯通所有流程的综合样板。
+* **`demo_example.py`** 为贯通所有流程的综合样板。
 
 ## 快速开始
 
@@ -67,7 +67,7 @@ uv run downloadmodels.py
 1. 将一段测试音频放在 `test_audio/` 目录下（例如默认提供或自行录制的音频文件）。
 2. 控制台运行：
 ```bash
-uv run demo_asr_llm_tts.py
+uv run demo_example.py
 ```
 执行完毕后，终端将依次打印出转写与情绪分析结果、LLM的陪护文本回复内容，并提示合成出的最新语音文件的保存路径。
 

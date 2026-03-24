@@ -183,4 +183,10 @@ cython_debug/
 .idea
 
 audio_emotion/pretrained_models
+audio_emotion/output
 .copilot/
+test_audio/
+demo_asr.py
+demo_emollm.py
+demo_tts.py
+demo_asr_llm_tts.py
