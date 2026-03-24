@@ -13,6 +13,8 @@ from audio_emotion import (
     analysis_audio_with_path,
     load_emollm_model,
     emollm_reply,
+    load_qwen_tts_model,
+    audio_tts,
 )
 
 load_dotenv()  # 从 .env 文件加载环境变量
@@ -84,7 +86,7 @@ if __name__ == "__main__":
 
     empllm_result = asyncio.run(
         emollm_reply(
-            asr_input=input_for_emollm,
+            input_for_emollm,
             emollm_model=emollm_model,
             emollm_tokenizer=emollm_tokenizer
         )
@@ -96,3 +98,17 @@ if __name__ == "__main__":
     release_cuda_memory(emollm_model, emollm_tokenizer)
     emollm_model = None
     emollm_tokenizer = None
+
+    # 加载 TTS 模型
+    model_dir = Path(os.getenv("MODEL_PATH_QWEN_QWEN3_TTS_12HZ_1_7B_CUSTOMVOICE"))
+    qwen_tts_model = load_qwen_tts_model(model_dir)
+
+    # 测试 Qwen TTS 模型
+    result_path = asyncio.run(
+        audio_tts(
+            empllm_result,
+            qwen_tts_model=qwen_tts_model,
+        )
+    )
+
+    print(f"生成的音频文件路径: {result_path}")

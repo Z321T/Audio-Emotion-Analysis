@@ -10,8 +10,8 @@ from typing import Any
 
 import torch
 import librosa
-from transformers import Qwen2AudioForConditionalGeneration
 from modelscope import AutoProcessor
+from transformers import Qwen2AudioForConditionalGeneration
 
 
 

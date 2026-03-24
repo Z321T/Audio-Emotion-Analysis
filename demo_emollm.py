@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # 测试情感大模型回复
     result = asyncio.run(
         emollm_reply(
-            asr_input=test_input,
+            test_input,
             emollm_model=emollm_model,
             emollm_tokenizer=emollm_tokenizer
         )
